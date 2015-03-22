@@ -1,0 +1,119 @@
+---
+output: word_document
+---
+
+## Human activity recognition - predicting how well the exercise was performed
+
+### Summary
+The aim of this analysis is to build and test a Machine Learning solution designed to predict the manner in which particular personal activity was done. The data comes from a set of sensors being worn by a group of 6 people. The manner the exercises were done was encoded in `classe` categorical variable of 5 levels: A, B, C, D, E. During the analysis, a set of predicors was reduced to ~50 variables, which were subsequently used to built a random forest classifier. Then, a set of predictions on a test set was obtained and submitted to Coursera. It turned out to have a 100% accuracy on this set.
+
+### Preliminary data analysis
+With assumption that both train and test sets are in working directory, we load the data with
+
+```{r, cache=TRUE}
+test <- read.csv("pml-testing.csv")
+train <- read.csv("pml-training.csv")
+dim(train)
+```
+
+The train set is far bigger than the test one (~20K rows and 20 rows, respectively). The distribution of the target variable is as follows:
+
+```{r, cache=TRUE}
+summary(train$classe)*100/nrow(train)
+```
+
+### Variable selection
+Quick look at the data shows that there are a lot of poor-quality variables in the train dataset. After checking the percentage of NAs in each variable, we decide to keep only the ones having less than 30% of missings.
+
+```{r, cache=TRUE}
+missing_cnt <- sapply(train, function(x) {100*sum(is.na(x))/nrow(train)})
+train1 <- train[,names(missing_cnt[missing_cnt<0.3])]
+dim(train1)
+```
+
+This reduces the number of variables in train set to 93. Then, we can observe that there are many variables having only 2 values either having a distribution in which one value (i.e. empty string) totally dominates other values. Variable `kurtosis_roll_belt` can be an example here:
+
+```{r, cache=TRUE}
+head(summary(train1$kurtosis_roll_belt))
+```
+
+We use a `nearZeroVar` method from `caret` package to remove such variables. When applying the method, we temporarily remove the target variable.
+
+```{r, cache=TRUE}
+library(caret)
+nz <- nearZeroVar(train1[,-93])
+train2 <- train1[,-nz]
+dim(train2)
+```
+
+The resulting dataset has only 59 potential predictors. Few more variables can be deleted after a bit more detailed examination of the dataset:
+
+```{r, cache=TRUE}
+str(train2, list.len=10)
+```
+
+We decide to delete `X` (iterator) and timestamp variables, as we don't want to set a relationship between time and target variable (timestamps in the test set could potentially be completely different).
+
+```{r, cache=TRUE}
+drops <- c("X", "raw_timestamp_part_1", "raw_timestamp_part_2","cvtd_timestamp")
+train3 <- train2[, !names(train2) %in% drops]
+dim(train3)
+```
+
+Finally, we get train set with 54 predictors and one target variable. The number of rows is too big as for our purpose, so we sample the data and obtain the dataset we will use for modelling and validation.
+
+```{r, cache=TRUE}
+set.seed(4562)
+train_fin <- train3[sample(1:nrow(train3), size=5000),]
+```
+
+To be sure sampling has been OK, we check the target distribution in the sample.
+
+```{r, cache=TRUE}
+summary(train_fin$classe)*100/nrow(train_fin)
+```
+
+### Modelling
+
+For modelling we use random forest algorithm with number of trees equal to 100. Resampling is done with `cv` (cross-validation) method, k-fold mode with k=3.
+
+```{r, cache=TRUE}
+set.seed(1122)
+rf <- train(classe ~ ., data=train_fin, method="rf", ntree=100,
+            trControl=trainControl(method="cv", number=3))
+rf
+```
+
+We can check which predictors turned out to be most important in our model. In order to avoid too much variables in one picture, we set the number of variables to 20. The higher in the picture the variables is, the greater is its influence on the target variable.
+
+```{r, cache=TRUE}
+varImpPlot(rf$finalModel, n.var=20, main="Main predictors")
+```
+
+### Diagnostics
+
+To get the estimate of out of the sample error, we can have a look at the final model summary:
+
+```{r, cache=TRUE}
+rf$finalModel
+```
+
+As we can see, the estimate of OOB error is 1.52%. This could be obtained by dividing the number of wrongly classified items from Confusion Matrix by the total number of cases.
+
+Below plot shows the error rate in relation to the number of trees used for each category of the target variable:
+
+```{r, cache=TRUE}
+plot(rf$finalModel, main="Error rate vs random forest size")
+```
+
+As can be observed, ~50 trees in the random forest would give us a prediction with similar level of error estimate.
+
+### Conclusions
+
+We succeeded in creating a classifier giving us out of the sample predictions with expected error rate of 1.52%. The set of prediction for our test set is as follows:
+
+```{r, cache=TRUE}
+predict(rf, test)
+```
+
+which appeared to be 100% true after submitting the values to validator. The most important predictors of `classe` are: `num_window`, `roll_belt`, `pitch_forearm` (further names to be extracted from the diagram above).
